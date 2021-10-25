@@ -8,6 +8,25 @@ Feel free to let me know if you know of improvements (e.g., how to improve citin
  - A recording of this presentation is available on [vimeo](https://vimeo.com/637888422).
  - The slides can be directly viewed in the browser [here](https://hoedt.github.io/Tricks-of-the-Trade-presentation/).
 
+### Generated Images
+
+The custom images for this presentation were generated in a python environment with following packages:
+
+```plain
+numpy~=1.19.2
+matplotlib~=3.3.4
+pytorch~=1.8.0
+torchvision~=0.9.0
+```
+
+Simply running the script in the `resources` directory should generate the images:
+
+```bash
+cd resources
+python normalisation.py
+cd ..
+```
+
 ### Further Reading
 
 My main resources are linked in the presentation, but probably there is a lot more information out there.
