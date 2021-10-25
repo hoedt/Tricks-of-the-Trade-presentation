@@ -5,7 +5,8 @@ Normally, I create my presentations using libreoffice or google slides, but this
 Since I have not yet completely figured things out yet, there might be some suboptimal solutions in there.
 Feel free to let me know if you know of improvements (e.g., how to improve citing/references).
 
-A recording of this presentation is available at https://vimeo.com/637888422
+ - A recording of this presentation is available on [vimeo](https://vimeo.com/637888422).
+ - The slides can be directly viewed in the browser [here](https://hoedt.github.io/Tricks-of-the-Trade-presentation/).
 
 ### Further Reading
 
