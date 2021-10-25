@@ -1,6 +1,9 @@
 import numpy as np
 import torch
+from torchvision import datasets
+from torchvision import transforms
 from matplotlib import pyplot as plt
+from torch.utils.data import DataLoader, Subset, random_split
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
 
@@ -24,7 +27,7 @@ def centred(x: np.ndarray, sig_dims: int = 0, axis: tuple = None):
     Returns
     -------
     x_c : np.ndarray
-        Array like `x`, but centred to have zero mean.
+        Array like `x`, but shifted to have zero mean.
     """
     x = np.atleast_2d(x)
     if axis is None:
@@ -36,21 +39,32 @@ def centred(x: np.ndarray, sig_dims: int = 0, axis: tuple = None):
 def normalised(x: np.ndarray, sig_dims: int = 0, eps: float = 1e-5):
     """
     Get a normalised version of a given dataset.
+
+    Parameters
+    ----------
+    x : np.ndarray
+        Array with at least 2 dimensions holding the dataset to be centred.
+        First dimension is assumed to be the number of samples.
+    sig_dims : int, optional
+        Number of dimensions of the signal in the dataset.
+        This allows to compute the statistics over the entire signal,
+        rather than over each entry in the signal individually.
+    eps : float, optional
+        Numerical constant that is used to avoid division by zero errors.
+
+    Returns
+    -------
+    x_n : np.ndarray
+        Array like `x`, but shifted to have zero mean 
+        and scaled to have unit variance.
     """
     axis = (0, *range(-1, -1 - sig_dims, -1))
     x_c = centred(x, axis=axis)
     var = np.mean(x_c * x_c, axis, keepdims=True)
     return x_c / (var + eps) ** .5
 
-
-def _generalised_eigh(arr: np.ndarray):
-    size = np.prod(arr.shape[:arr.ndim // 2])
-    l, u = np.linalg.eigh(arr.reshape(size, size))
-    l = l.reshape(arr.shape[:arr.ndim // 2])
-    u = u.reshape(arr.shape)
-    return l, u
-
 def _whitened_flat(x: np.ndarray, zca: bool = False, eps: float = 1e-5):
+    """ Get a whitened version of a dataset with scalar features. """
     _x_c = centred(x, sig_dims=0)
     x_c = _x_c.reshape(len(_x_c), -1)
     cov = x_c.T @ x_c / len(x_c)
@@ -63,7 +77,30 @@ def _whitened_flat(x: np.ndarray, zca: bool = False, eps: float = 1e-5):
     
     return x_w.reshape(_x_c.shape)
 
-def _whitened(x: np.ndarray, zca: bool = False, sig_dims: int = 0, eps: float = 1e-5):
+def whitened(x: np.ndarray, zca: bool = False, sig_dims: int = 0, eps: float = 1e-5):
+    """ 
+    Get a whitened version of a dataset.
+
+    Parameters
+    ----------
+    x : np.ndarray
+        Array with at least 2 dimensions holding the dataset to be centred.
+        First dimension is assumed to be the number of samples.
+    zca : bool, optional
+        Use ZCA whitening if `True`, otherwise use PCA whitening (default).
+    sig_dims : int, optional
+        Number of dimensions of the signal in the dataset.
+        This allows to compute the statistics over the entire signal,
+        rather than over each entry in the signal individually.
+    eps : float, optional
+        Numerical constant that is used to avoid division by zero errors.
+
+    Returns
+    -------
+    x_w : np.ndarray
+        Array like `x`, but shifted to have zero mean,
+        scaled to have unit variance and rotated to have zero covariance.
+    """
     axis = (0, *range(-1, -1 - sig_dims, -1))
     _x_c = centred(x, axis=axis)
     
@@ -82,32 +119,15 @@ def _whitened(x: np.ndarray, zca: bool = False, sig_dims: int = 0, eps: float = 
     return x_w.reshape(_x_c.shape)
 
 
-def whitened(x: np.ndarray, zca: bool = False, sig_dims: int = 0, eps: float = 1e-5):
-    """
-    Get a whitened version of a given dataset.
-    """
-    axis = (0, *range(-1, -1 - sig_dims, -1))
-    x_c = centred(x, axis=axis)
-
-    num_features = np.prod(x_c.shape[1:-sig_dims])
-    num_samples = x_c.size // num_features
-    cov = np.tensordot(x_c, x_c, axes=(axis, axis)) / num_samples
-    l, u = _generalised_eigh(cov)
-
-    axis_dual = range(1, x_c.ndim - sig_dims)
-    x_rot = np.tensordot(x_c, u, axes=(axis_dual, range(len(axis_dual))))
-    x_rot = np.moveaxis(x_rot, range(-len(axis_dual), 0), axis_dual)
-    
-    x_w = x_rot / (l.reshape(l.shape + (1, ) * sig_dims) + eps) ** .5
-    if zca:
-        x_w = np.tensordot(x_w, u, axes=(axis_dual, range(-len(axis_dual), 0)))
-        x_w = np.moveaxis(x_w, range(-len(axis_dual), 0), axis_dual)
-    
-    return x_w
+def accuracy(pred, y):
+    """ Compute accuracy of predictions. """
+    correct = (pred.argmax(1) == y).float()
+    return correct.mean(0)
 
 
 @torch.no_grad()
 def evaluate(model, samples, metrics):
+    """ One epoch of validation. """
     model.eval()
 
     results = {k: [] for k in metrics}
@@ -122,6 +142,7 @@ def evaluate(model, samples, metrics):
 
 @torch.enable_grad()
 def update(model, samples, loss_func, optimiser):
+    """ One epoch of training. """
     model.train()
 
     errs = []
@@ -137,9 +158,155 @@ def update(model, samples, loss_func, optimiser):
     return errs
 
 
+def train_with_sgd(model, train_data, valid_data, metrics, 
+                   lr: float = 1e-2, batch_size: int = 64, max_epochs: int = 16):
+    """ Train a network with SGD for a few epochs. """
+    torch.manual_seed(1234)
+    train_samples = DataLoader(train_data, batch_size=batch_size)
+    valid_samples = DataLoader(valid_data, batch_size=len(valid_data))
+
+    model[0].reset_parameters()
+    model[-1].reset_parameters()
+    sgd = torch.optim.SGD(model.parameters(), lr=lr)
+
+    train_errs, valid_errs = [], []
+    results = evaluate(model, valid_samples, metrics)
+    valid_errs.extend(results['loss'])
+    print("epoch 00", "?")
+
+    loss_func = metrics['loss']
+    for epoch in range(1, 1 + max_epochs):
+        errs = update(model, train_samples, loss_func, sgd)
+        train_errs.extend(errs)
+        results = evaluate(model, valid_samples, metrics)
+        valid_errs.extend(results['loss'])
+        print(f"epoch {epoch:02d}", errs[-1])
+    
+    return train_errs, valid_errs
+
+
+def train_multiple_mnist(learning_rates: tuple = (1e-2, ), batch_sizes: tuple = (64, ), 
+                         epoch_maxs: tuple = (16, ), debug: bool = False):
+    """ Train a fixed architecture for MNIST on multiple hyper-parameters. """
+    mnist = datasets.MNIST("~/.pytorch", transform=transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((.1307, ), (.3081, ))
+    ]))
+    my_mnist = Subset(mnist, range(1000))
+    if debug:
+        mnist_train = Subset(my_mnist, [0, 1])
+        mnist_valid = Subset(my_mnist, range(2, len(my_mnist)))
+    else:
+        mnist_train, mnist_valid = random_split(my_mnist, [800, 200])
+
+    model = torch.nn.Sequential(
+        torch.nn.Conv2d(1, 8, 5),
+        torch.nn.ReLU(),
+        torch.nn.Flatten(),
+        torch.nn.Linear(8 * 24 * 24, 10),
+    )
+    ce = torch.nn.CrossEntropyLoss()
+    metrics = {'loss': ce, 'acc': accuracy}
+
+    for lr in learning_rates:
+        for batch_size, max_epochs in zip(batch_sizes, epoch_maxs):
+            train_errs, valid_errs = train_with_sgd(
+                model, mnist_train, mnist_valid, metrics,
+                lr=lr, batch_size=batch_size, max_epochs=max_epochs
+            )
+            yield train_errs, valid_errs, {'lr': lr, 'bs': batch_size, 'ep': max_epochs}
+
+
+def plot_single_sample_overfit(ax=None):
+    """ 
+    Create plot to illustrate overfitting behaviour on few samples. 
+    
+    Note
+    ----
+    The figure from the presentation used during the recording used an even simpler model.
+    """
+    if ax is None:
+        ax = plt.gca()
+    
+    for train_errs, valid_errs, _ in train_multiple_mnist(
+        learning_rates=(1e-1, ), epoch_maxs=(6, ), debug=True
+    ):
+        ax.plot(train_errs, label="train")
+        ax.plot(valid_errs, label="valid")
+
+    ax.set_xlabel("epochs")
+    ax.set_ylabel("cross-entropy")
+    ax.legend()
+    return ax
+
+
+def plot_learning_rates(ax=None):
+    """ Create plot to illustrate importance of learning rate. """
+    if ax is None:
+        ax = plt.gca()
+    
+    for train_errs, valid_errs, kwargs in train_multiple_mnist(
+        learning_rates=(5e-1, 1e-1, 1e-3)
+    ):
+        p = ax.plot(np.linspace(0, kwargs['ep'], len(train_errs)), train_errs, 
+                    label=f"train (lr={kwargs['lr']:.0e})")
+        ax.plot(valid_errs, color=p[-1].get_color(), linestyle='--', label='valid')
+        ax.set_ylim(0, 3)
+    
+    ax.legend()
+    return ax
+
+
+def plot_batch_sizes(fig=None):
+    """ Create plot to illustrate importance of update count. """
+    if fig is None:
+        fig = plt.gcf()
+    
+    ax1, ax2 = fig.subplots(2, 1)
+    for train_errs, valid_errs, kwargs in train_multiple_mnist(
+        batch_sizes=(16, 64, 256), epoch_maxs=(4, 16, 64)
+    ):
+        p = ax1.plot(train_errs, label=f"train (bs={kwargs['bs']:d})")
+        ax1.plot(np.linspace(0, len(train_errs), len(valid_errs)), valid_errs, 
+                 color=p[-1].get_color(), linestyle='--')
+        ax1.set_xlabel('updates')
+        ax1.xaxis.set_ticks_position('top')
+        ax1.xaxis.set_label_position('top')
+        ax1.set_ylim(0, 2)
+
+        p = ax2.plot(np.linspace(0, kwargs['ep'], len(train_errs)), train_errs, 
+                     label=f"train (bs={kwargs['bs']:d})")
+        ax2.plot(valid_errs, color=p[-1].get_color(), linestyle='--')
+        ax2.set_xlabel('epochs')
+        ax2.set_ylim(0, 2)
+    
+    ax2.legend()
+    return fig
+
 
 def plot_statistics(x: np.ndarray, bounds: tuple = None,
                     cmap: str = 'cividis', fig=None):
+    """ 
+    Visualise (pixel-wise) mean and standard deviation of image dataset.
+
+    Parameters
+    ----------
+    x : np.ndarray
+        Dataset to compute the statistics from.
+    bounds : (float, float), optional
+        Lower and upper bound for the values in the dataset.
+        These bounds are important for consistent plots.
+    cmap : str, optional
+        The color map to use for visualising the mean.
+        This can/should be the same color map as used for the original images.
+    fig : plt.figure, optional
+        The figure to use for plotting.
+
+    Returns
+    -------
+    fig : plt.figure
+        The figure with the plots.
+    """
     if fig is None:
         fig = plt.figure()
     if bounds is None:
@@ -180,29 +347,34 @@ def plot_statistics(x: np.ndarray, bounds: tuple = None,
 
 
 
-def plot_samples(x: np.ndarray, nrows: int = 2, ncols: int = 5, cmap='cividis',
-                 bounds: tuple = None, fig=None):
-    """
-    Create plot with samples and statistics of image dataset.
+def plot_samples(x: np.ndarray, nrows: int = 2, ncols: int = 5,
+                 bounds: tuple = None, cmap='cividis', fig=None):
+    """ 
+    Visualise a few samples from an image dataset.
 
     Parameters
     ----------
     x : np.ndarray
-        The dataset to visualise.
+        Dataset to get the samples from.
     nrows : int, optional
-        The number of rows in the visualisation.
-        Specifies (together with `ncols`) the number of samples to be shown.
-    nrows : int, optional
-        The number of columns in the visualisation.
-        Specifies (together with `nrows`) the number of samples to be shown.
-    cmap : str or cmap, optional
-        The color map to use for visualising samples.
-    low: float, optional
-        Lower bound for clipping visualised pixel values.
-    high: float, optional
-        Upper bound for clipping visualised pixel values.
-    fig : figure, optional
-        The figure to draw the plot on.
+        The number of rows with samples in the figure.
+        The total number of plotted samples will be `nrows * ncols`.
+    ncols : int, optional
+        The number of columns with samples in the figure.
+        The total number of plotted samples will be `nrows * ncols`.
+    bounds : (float, float), optional
+        Lower and upper bound for the values in the dataset.
+        These bounds are important for consistent plots.
+    cmap : str, optional
+        The color map to use for visualising the mean.
+        This can/should be the same color map as used for the original images.
+    fig : plt.figure, optional
+        The figure to use for plotting.
+
+    Returns
+    -------
+    fig : plt.figure
+        The figure with the plots.
     """
     if fig is None:
         fig = plt.figure()
@@ -272,13 +444,13 @@ def generate_plots(x_raw: np.ndarray, name: str):
     fig_normed = plot_statistics(x_mlp_n, bounds=(-1.3, 3.0))
     fig_normed.savefig('_'.join([name, "stats_pxl_normalised_clipped.png"]), **save_kwargs)
 
-    x_mlp_pca = _whitened(x_float)
+    x_mlp_pca = whitened(x_float)
     fig_pca = plot_samples(x_mlp_pca, bounds=(-3, 3))
     fig_pca.savefig('_'.join([name, "samples_pxl_pca_clipped.png"]), **save_kwargs)
     fig_pca = plot_statistics(x_mlp_pca, bounds=(-3, 3))
     fig_pca.savefig('_'.join([name, "stats_pxl_pca_clipped.png"]), **save_kwargs)
 
-    x_mlp_zca = _whitened(x_float, zca=True)
+    x_mlp_zca = whitened(x_float, zca=True)
     fig_zca = plot_samples(x_mlp_zca, bounds=(-3, 3))
     fig_zca.savefig('_'.join([name, "samples_pxl_zca_clipped.png"]), **save_kwargs)
     fig_zca = plot_statistics(x_mlp_zca, bounds=(-3, 3))
@@ -299,13 +471,13 @@ def generate_plots(x_raw: np.ndarray, name: str):
     fig_normed = plot_statistics(x_cnn_n)
     fig_normed.savefig('_'.join([name, "stats_img_normalised.png"]), **save_kwargs)
 
-    x_cnn_pca = _whitened(x_float, sig_dims=2)
+    x_cnn_pca = whitened(x_float, sig_dims=2)
     fig_pca = plot_samples(x_cnn_pca)
     fig_pca.savefig('_'.join([name, "samples_img_pca.png"]), **save_kwargs)
     fig_pca = plot_statistics(x_cnn_pca)
     fig_pca.savefig('_'.join([name, "stats_img_pca.png"]), **save_kwargs)
 
-    x_cnn_zca = _whitened(x_float, zca=True, sig_dims=2)
+    x_cnn_zca = whitened(x_float, zca=True, sig_dims=2)
     fig_zca = plot_samples(x_cnn_zca)
     fig_zca.savefig('_'.join([name, "samples_img_zca.png"]), **save_kwargs)
     fig_zca = plot_statistics(x_cnn_zca)
@@ -337,122 +509,25 @@ def generate_plots(x_raw: np.ndarray, name: str):
     
     fig.savefig('mnist_samples_augmented.png')
 
+    plt.figure()
+    plot_single_sample_overfit()
+    plt.savefig("debug_overfit.png")
+
+    plt.figure()
+    plot_learning_rates()
+    plt.savefig("lr_importance.png")
+
+    fig = plot_batch_sizes(fig=plt.figure())
+    fig.savefig("updates_vs_epochs.png", dpi=200)
+
 
 
 if __name__ == '__main__':
-    from torchvision import datasets
-    from torchvision import transforms
-    
-    # mnist = datasets.MNIST("~/.pytorch")
-    # x_raw = mnist.data.view(-1, 1, 28, 28).numpy()
-    # generate_plots(x_raw, name='mnist')
+    mnist = datasets.MNIST("~/.pytorch")
+    x_raw = mnist.data.view(-1, 1, 28, 28).numpy()
+    generate_plots(x_raw, name='mnist')
 
-    import torch
-    from torch.utils.data import DataLoader, Subset, random_split
-
-    max_epochs = 10
-    debug = False
-
-    def accuracy(pred, y):
-        correct = (pred.argmax(1) == y).float()
-        return correct.mean(0)
-
-    mnist = datasets.MNIST("~/.pytorch", transform=transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize((.1307, ), (.3081, ))
-    ]))
-    my_mnist = Subset(mnist, range(1000))
-    if debug:
-        mnist_train = Subset(my_mnist, [0, 1])
-        mnist_valid = Subset(my_mnist, range(2, len(my_mnist)))
-    else:
-        mnist_train, mnist_valid = random_split(my_mnist, [800, 200])
-
-    model = torch.nn.Sequential(
-        torch.nn.Conv2d(1, 8, 5),
-        torch.nn.ReLU(),
-        torch.nn.Flatten(),
-        torch.nn.Linear(8 * 24 * 24, 10),
-    )
-    ce = torch.nn.CrossEntropyLoss()
-    metrics = {'loss': ce, 'acc': accuracy}
-
-    lr=1e-2  # for lr in (5e-1, 1e-1, 1e-3):
-    fig, (ax1, ax2) = plt.subplots(2, 1)
-    for batch_size, max_epochs in zip((16, 64, 256), (4, 16, 64)):
-        torch.manual_seed(1234)
-        train_samples = DataLoader(mnist_train, batch_size=batch_size)
-        valid_samples = DataLoader(mnist_valid, batch_size=len(mnist_valid))
-
-        model[0].reset_parameters()
-        model[-1].reset_parameters()
-        sgd = torch.optim.SGD(model.parameters(), lr=lr)
-
-        train_errs, valid_errs = [], []
-        results = evaluate(model, valid_samples, metrics)
-        valid_errs.extend(results['loss'])
-        print("epoch 00", "?")
-        for epoch in range(1, 1 + max_epochs):
-            errs = update(model, train_samples, ce, sgd)
-            train_errs.extend(errs)
-            results = evaluate(model, valid_samples, metrics)
-            valid_errs.extend(results['loss'])
-            print(f"epoch {epoch:02d}", errs[-1])
-        
-        # p = plt.plot(np.linspace(0, max_epochs, len(train_errs)), train_errs, label=f'train (lr={lr:.0e})')
-        # plt.plot(valid_errs, color=p[-1].get_color(), linestyle='--', label='valid')
-        # plt.ylim(0, 3)
-        p = ax1.plot(train_errs, label=f'train (bs={batch_size:d})')
-        ax1.plot(np.linspace(0, len(train_errs), len(valid_errs)), valid_errs, 
-                 color=p[-1].get_color(), linestyle='--')
-        ax1.set_xlabel('updates')
-        ax1.xaxis.set_ticks_position('top')
-        ax1.xaxis.set_label_position('top')
-        ax1.set_ylim(0, 2)
-        p = ax2.plot(np.linspace(0, max_epochs, len(train_errs)), train_errs, label=f'train (bs={batch_size:d})')
-        ax2.plot(valid_errs, color=p[-1].get_color(), linestyle='--')
-        ax2.set_xlabel('epochs')
-        ax2.set_ylim(0, 2)
-    
-    ax2.legend()
-    # plt.savefig('lr_importance.png')
-    plt.savefig('updates_vs_epochs.png', dpi=200)
-
-
-    # # overfit 2 samples
-    # fc = torch.nn.Sequential(
-    #     torch.nn.Flatten(),
-    #     torch.nn.Linear(784, 10)
-    # )
-    # loader = torch.utils.data.DataLoader(mnist, batch_size=2)
-    # x, y = next(iter(loader))
-    # valid_data = torch.utils.data.Subset(mnist, range(2, len(mnist)))
-    # valid_loader = torch.utils.data.DataLoader(valid_data, batch_size=998)
-    # x_val, y_val = next(iter(valid_loader))
-    # opt = torch.optim.SGD(fc.parameters(), lr=1e-1)
-    # ce = torch.nn.CrossEntropyLoss()
-    # errs, val_errs = [], []
-    # for _ in range(1, 6):
-    #     pred = fc(x)
-    #     err = ce(pred, y)
-    #     errs.append(err.item())
-
-    #     with torch.no_grad():
-    #         pred = fc(x_val)
-    #         val_err = ce(pred, y_val)
-    #         val_errs.append(val_err.item())
-
-    #     opt.zero_grad()
-    #     err.backward()
-    #     opt.step()
-    
-    # plt.plot(errs, label="train")
-    # plt.plot(val_errs, label="valid")
-    # plt.xlabel("epochs")
-    # plt.ylabel("cross-entropy")
-    # plt.legend()
-    # plt.savefig("debug_overfit.png")
-
+    # # only useful for data pre-processing plots...
     # cifar = datasets.CIFAR10("~/.pytorch")
     # x_raw = np.moveaxis(cifar.data, -1, 1)
     # generate_plots(x_raw, name='cifar')
