@@ -162,6 +162,7 @@ def train_with_sgd(model, train_data, valid_data, metrics,
                    lr: float = 1e-2, batch_size: int = 64, max_epochs: int = 16):
     """ Train a network with SGD for a few epochs. """
     torch.manual_seed(1234)
+    torch.use_deterministic_algorithms(True)
     train_samples = DataLoader(train_data, batch_size=batch_size)
     valid_samples = DataLoader(valid_data, batch_size=len(valid_data))
 
@@ -186,8 +187,10 @@ def train_with_sgd(model, train_data, valid_data, metrics,
 
 
 def train_multiple_mnist(learning_rates: tuple = (1e-2, ), batch_sizes: tuple = (64, ), 
-                         epoch_maxs: tuple = (16, ), debug: bool = False):
+                         epoch_maxs: tuple = (16, ), loss_reduction: str = "mean",
+                         debug: bool = False):
     """ Train a fixed architecture for MNIST on multiple hyper-parameters. """
+    torch.manual_seed(123)
     mnist = datasets.MNIST("~/.pytorch", transform=transforms.Compose([
         transforms.ToTensor(),
         transforms.Normalize((.1307, ), (.3081, ))
@@ -205,7 +208,7 @@ def train_multiple_mnist(learning_rates: tuple = (1e-2, ), batch_sizes: tuple = 
         torch.nn.Flatten(),
         torch.nn.Linear(8 * 24 * 24, 10),
     )
-    ce = torch.nn.CrossEntropyLoss()
+    ce = torch.nn.CrossEntropyLoss(reduction=loss_reduction)
     metrics = {'loss': ce, 'acc': accuracy}
 
     for lr in learning_rates:
@@ -257,28 +260,36 @@ def plot_learning_rates(ax=None):
     return ax
 
 
-def plot_batch_sizes(fig=None):
+def plot_batch_sizes(fig=None, reduction="mean"):
     """ Create plot to illustrate importance of update count. """
+    lr = 1e-2
+    epochs = (4, 16, 64)
+    y_max = 2
+    if reduction != "mean":
+        lr /= 64
+        epochs = (16, 16, 16)
+        y_max = 400
+    
     if fig is None:
         fig = plt.gcf()
     
     ax1, ax2 = fig.subplots(2, 1)
     for train_errs, valid_errs, kwargs in train_multiple_mnist(
-        batch_sizes=(16, 64, 256), epoch_maxs=(4, 16, 64)
+        batch_sizes=(16, 64, 256), epoch_maxs=epochs, 
+        loss_reduction=reduction, learning_rates=(lr, )
     ):
-        p = ax1.plot(train_errs, label=f"train (bs={kwargs['bs']:d})")
+        p = ax1.plot(train_errs, alpha=0.2)
         ax1.plot(np.linspace(0, len(train_errs), len(valid_errs)), valid_errs, 
-                 color=p[-1].get_color(), linestyle='--')
+                 color=p[-1].get_color(), linestyle='--', label=f"valid (bs={kwargs['bs']:d})")
         ax1.set_xlabel('updates')
         ax1.xaxis.set_ticks_position('top')
         ax1.xaxis.set_label_position('top')
-        ax1.set_ylim(0, 2)
+        ax1.set_ylim(0, y_max)
 
-        p = ax2.plot(np.linspace(0, kwargs['ep'], len(train_errs)), train_errs, 
-                     label=f"train (bs={kwargs['bs']:d})")
-        ax2.plot(valid_errs, color=p[-1].get_color(), linestyle='--')
+        p = ax2.plot(np.linspace(0, kwargs['ep'], len(train_errs)), train_errs, alpha=0.2)
+        ax2.plot(valid_errs, color=p[-1].get_color(), linestyle='--', label=f"valid (bs={kwargs['bs']:d})")
         ax2.set_xlabel('epochs')
-        ax2.set_ylim(0, 2)
+        ax2.set_ylim(0, y_max)
     
     ax2.legend()
     return fig
@@ -519,6 +530,9 @@ def generate_plots(x_raw: np.ndarray, name: str):
 
     fig = plot_batch_sizes(fig=plt.figure())
     fig.savefig("updates_vs_epochs.png", dpi=200)
+
+    fig = plot_batch_sizes(fig=plt.figure(), reduction="sum")
+    fig.savefig("updates_vs_epochs_summed.png", dpi=200)
 
 
 
