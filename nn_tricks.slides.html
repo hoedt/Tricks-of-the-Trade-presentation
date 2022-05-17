@@ -459,7 +459,7 @@
 							<p>
 								$\begin{aligned}
 								  \mathrm{ E}_{\vec{w}^*}
-								  &\approx \mathrm{E}_{\vec{w}} + \operatorname{\nabla} \mathrm{E}_{\vec{w}} \cdot (\vec{w}^* - \vec{w}) + \frac{1}{2} \|\vec{w}^* - \vec{w}\|_{\operatorname{\nabla}^2 \mathrm{E}_{\vec{w}}}^2 \\
+								  &\approx \mathrm{E}_{\vec{w}} + \operatorname{\nabla} \mathrm{E}_{\vec{w}} \cdot (\vec{w}^* - \vec{w}) \\ %+ \frac{1}{2} \|\vec{w}^* - \vec{w}\|_{\operatorname{\nabla}^2 \mathrm{E}_{\vec{w}}}^2 \\
 								  \operatorname{\nabla} \mathrm{E}_{\vec{w}^*} 
 								  &\approx \operatorname{\nabla} \mathrm{E}_{\vec{w}} + \operatorname{\nabla}^2 \mathrm{E}_{\vec{w}} \cdot (\vec{w}^* - \vec{w})
 								\end{aligned}$
@@ -838,7 +838,7 @@
 							- skip connections
 						</aside>
 					</section>
-					<section>
+					<!--section>
 						<h2>Initialising your<br/>Model</h2>
 						<div class="r-stretch r-vstack">
 							<p>
@@ -960,7 +960,7 @@
 						<aside class="notes">
 							- descrepancy between forward and backward pass
 						</aside>
-					</section>
+					</section-->
 					<section>
 						<h2>Initialising your<br/>Model</h2>
 						<div class="r-stretch r-vstack">
@@ -995,7 +995,7 @@
 	
 								<ul>
 									<li>Balanced data: $\vec{b} = \vec{0}$</li>
-									<li>Unbalanced data: $\vec{b} \propto p(\vec{y})$</li>
+									<li>Unbalanced data: $b_k \propto \ln\Big(\frac{p(y_k)}{1 - p(y_k)}\Big)$</li>
 								</ul>
 							</div>
 							<p class="fragment">
@@ -1037,10 +1037,12 @@
 						<h2>Normalising your<br/>Model</h2>
 						<div class="r-stretch r-stack">
 							<figure>
-								<img src="https://i.stack.imgur.com/DLwRc.png" width="1000" height="200" style="object-fit: cover; object-position: 0 0;"
+								<img src="https://iclr-blog-track.github.io/public/images/2022-03-25-unnormalized-resnets/normalisation_dimensions.svg" 
+								     width="900" style="object-fit: cover; object-position: 0 0;"
 								     alt="visualisation of multiple normalisation methods" />
 								<figcaption>
-									different axes of normalisation (<a href="#wu18group">Wu & He, 2018</a>)
+									different axes of normalisation 
+									(<a href="#hoedt22normalisation">Hoedt et al., 2022</a>; <a href="#wu18group">Wu & He, 2018</a>)
 								</figcaption>
 							</figure>
 							<div class="fragment" style="background-color: white;">
@@ -1200,8 +1202,11 @@
 					</section>
 					<section>
 						<h2>Rate of<br/>Learning</h2>
-						<div class="r-stretch r-hstack">
-							<figure>
+						<div class="r-stack r-stretch">
+							<pre style="width: 600px"><code class="python" data-trim>
+								ce = nn.CrossEntropyLoss(reduction="mean")
+							</code></pre>
+							<figure class="fragment">
 								<img src="resources/updates_vs_epochs.png" width="600px"
 								     alt="learning curves as functions of epoch vs update" />
 								<figcaption>
@@ -1210,7 +1215,27 @@
 							</figure>
 						</div>
 						<aside class="notes">
+							when optimising mean of errors:
 							number of updates more important than number of epochs!
+						</aside>
+					</section>
+					<section>
+						<h2>Rate of<br/>Learning</h2>
+						<div class="r-stack r-stretch">
+							<figure>
+								<img src="resources/updates_vs_epochs_summed.png" width="600px"
+								     alt="learning curves as functions of epoch vs update" />
+								<figcaption>
+									Learning curves for different batch sizes (and number of epochs)
+								</figcaption>
+							</figure>
+							<pre class="fragment" style="width: 600px"><code class="python" data-trim>
+								ce = nn.CrossEntropyLoss(reduction="sum")
+							</code></pre>
+						</div>
+						<aside class="notes">
+							when optimising sum of errors:
+							number of epochs more important than number of updates!
 						</aside>
 					</section>
 					<section>
@@ -1367,7 +1392,7 @@
 					</div>
 				</section>
 
-				<section data-state="no-footer">
+				<section id="references" data-state="no-footer">
 					<h3>References</h3>
 					<div class="references r-stretch">
 						<p id="ba16layernorm">
@@ -1442,6 +1467,11 @@
 							Computer Vision – ECCV 2016 (pp. 630–645). Springer International Publishing. 
 							(<a href="https://doi.org/10.1007/978-3-319-46493-0_38">link</a>,
 							 <a href="https://openaccess.thecvf.com/content_cvpr_2016/papers/He_Deep_Residual_Learning_CVPR_2016_paper.pdf">pdf</a>)
+						</p>
+						<p id="hoedt22normalisation">
+							Hoedt et al. (2022). Normalization is dead, long live normalization!.
+							ICLR Blog Track.
+							(<a href="https://iclr-blog-track.github.io/2022/03/25/unnormalized-resnets/">link</a>) 
 						</p>
 						<p id="ioffe15batchnorm">
 							Ioffe & Szegedy (2015). Batch Normalization: Accelerating Deep Network Training by Reducing Internal Covariate Shift. 
